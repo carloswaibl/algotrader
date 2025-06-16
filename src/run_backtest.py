@@ -1,41 +1,91 @@
+# --- IMPORTANT: SET MATPLOTLIB BACKEND ---
+# This must be done BEFORE importing backtrader or pyplot
+import matplotlib
+matplotlib.use('Agg')
+
 import backtrader as bt
 import pandas as pd
+from pathlib import Path
+from datetime import date
+
+# Import the strategy that has been enhanced to accept the options dataframe
 from strategies.zero_dte_spread import ZeroDTESpread
 
-if __name__ == '__main__':
-    cerebro = bt.Cerebro()
+class PandasDataWithVWAP(bt.feeds.PandasData):
+    # Add the vwap line to the data feed
+    # lines = ('vwap',)
 
-    # --- Add Strategy ---
-    cerebro.addstrategy(ZeroDTESpread)
-    
-    # --- Load Data ---
-    # In a real scenario, you need a custom data feed for your options data.
-    # For now, let's create some dummy data to make the script runnable.
-    
-    # Dummy SPX data
-    spx_dummy_data = pd.read_csv(
-        'https://raw.githubusercontent.com/backtrader/backtrader/master/datas/2006-day-001.txt',
-        parse_dates=True, index_col=0
+    # Tell backtrader which column name in the dataframe corresponds to each line
+    # -1 indicates that the column name should be automatically matched to the line name
+    params = (
+        ('datetime', None), # Use the index for datetime
+        ('open', 'open'),
+        ('high', 'high'),
+        ('low', 'low'),
+        ('close', 'close'),
+        ('volume', None),
+        ('openinterest', None),
     )
-    spx_data_feed = bt.feeds.PandasData(dataname=spx_dummy_data)
-    cerebro.adddata(spx_data_feed, name='SPX')
-    
-    # Dummy Options Data - THIS IS A CRITICAL PART YOU WILL BUILD
-    # You would load your Parquet file here and create a custom feed
-    # that Backtrader can understand.
-    options_dummy_data = spx_dummy_data.copy() # Just to have a second data feed
-    options_data_feed = bt.feeds.PandasData(dataname=options_dummy_data)
-    cerebro.adddata(options_data_feed, name='Options')
 
-    # --- Configure Cerebro ---
-    cerebro.broker.setcash(100000.0)
-    cerebro.addsizer(bt.sizers.FixedSize, stake=10) # Trade 10 contracts
-    cerebro.broker.setcommission(commission=0.65, mult=100) # Per contract commission
+if __name__ == '__main__':
+    try:
+        cerebro = bt.Cerebro()
 
-    # --- Run Backtest ---
-    print('Starting Portfolio Value: %.2f' % cerebro.broker.getvalue())
-    results = cerebro.run()
-    print('Final Portfolio Value: %.2f' % cerebro.broker.getvalue())
+        # --- CONFIGURATION ---
+        # This should match the date you downloaded with the data pipeline
+        TARGET_DATE_STR = "20240510"
+        DATA_DIR = Path("./data/parquet")
+        PLOT_DIR = Path("./plots")
+        PLOT_DIR.mkdir(exist_ok=True) # Ensure the plots directory exists
 
-    # --- Plot Results ---
-    cerebro.plot(style='candlestick', barup='green', bardown='red')
+        # --- Load Data ---
+        # 1. Load the primary SPX data feed. This will drive the backtest.
+        spx_file = DATA_DIR / f"NDX_{TARGET_DATE_STR}.parquet"
+        if not spx_file.exists():
+            raise FileNotFoundError(f"SPX data file not found: {spx_file}")
+        
+        spx_df = pd.read_parquet(spx_file)
+        # Ensure data is in chronological order
+        spx_df = spx_df.sort_index()
+        spx_data_feed = PandasDataWithVWAP(dataname=spx_df)
+        cerebro.adddata(spx_data_feed, name='SPX')
+        
+        # 2. Load the entire options chain data into a pandas DataFrame.
+        # This will NOT be a backtrader feed, but a parameter for the strategy.
+        # options_file = DATA_DIR / f"SPX_OPTIONS_{TARGET_DATE_STR}.parquet"
+        # if not options_file.exists():
+        #     raise FileNotFoundError(f"Options data file not found: {options_file}")
+
+        # options_df = pd.read_parquet(options_file)
+        # Convert timestamp to a datetime object for easier filtering
+        # options_df['timestamp'] = pd.to_datetime(options_df['timestamp'])
+        
+        # --- Add Strategy ---
+        # Pass the options dataframe directly to the strategy's constructor
+        cerebro.addstrategy(ZeroDTESpread)
+
+        # --- Configure Cerebro ---
+        starting_cash = 100000.0
+        cerebro.broker.setcash(starting_cash)
+        cerebro.addsizer(bt.sizers.FixedSize, stake=10)
+        cerebro.broker.setcommission(commission=0.65) 
+
+        # --- Run Backtest ---
+        print(f'Starting Portfolio Value: {starting_cash:.2f}')
+        results = cerebro.run()
+        final_value = cerebro.broker.getvalue()
+        print(f'Final Portfolio Value: {final_value:.2f}')
+
+        # --- Save the Plot Conditionally ---
+        if final_value != starting_cash:
+            print(f"Saving plot to {PLOT_DIR / 'backtest_result.png'}")
+            # The plot() method returns a list of figures. We take the first one.
+            # We also disable the volume plot as it can sometimes cause issues.
+            figure = cerebro.plot(style='candlestick', barup='green', bardown='red', iplot=False, volume=False)[0][0]
+            figure.savefig(PLOT_DIR / 'backtest_result.png', dpi=300)
+        else:
+            print("\nNo trades were executed or portfolio value did not change.")
+            print("This is likely because the strategy's entry conditions were not met.")
+            print("Skipping plot generation.")
+    except Exception as e:
+        print(f"Error: {e}")
