@@ -1,0 +1,25 @@
+version: "3.8"
+
+services:
+  backtester:
+    build: .
+    container_name: smarter_trader_backtester
+    # Map port 8888 on your local machine to port 8888 inside the container
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./src:/app/src
+      - ./data:/app/data
+      - ./notebooks:/app/notebooks
+      - ./plots:/app/plots
+    # This command now works correctly because the port is exposed
+    command: >
+      sh -c "jupyter-lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --LabApp.token=''"
+
+  run_0dte_backtest:
+    build: .
+    volumes:
+      - ./src:/app/src
+      - ./data:/app/data
+      - ./plots:/app/plots # Added plots volume here as well
+    command: python src/run_backtest.py

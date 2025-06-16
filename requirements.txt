@@ -1,0 +1,7 @@
+backtrader
+pandas
+matplotlib
+pyarrow          # Required by pandas for Parquet support
+scikit-learn     # For future ML strategies
+jupyterlab       # For running notebooks
+plotly
